@@ -1,58 +1,34 @@
-import configparser
+#import configparser
+import os
 import requests
 import logging
 import redis
 from telegram import Update
 from telegram.ext import (Updater, CommandHandler, MessageHandler, Filters, CallbackContext)
-
-# Define the class for interacting with ChatGPT
-class HKBU_ChatGPT:
-    def __init__(self, config_='./config.ini'):
-        if type(config_) == str:
-            self.config = configparser.ConfigParser()
-            self.config.read(config_, encoding='utf-8-sig')
-        elif isinstance(config_, configparser.ConfigParser):
-            self.config = config_
-
-    def submit(self, message):
-        conversation = [{"role": "user", "content": message}]
-        url = (self.config['CHATGPT']['BASICURL']) + \
-              "/deployments/" + (self.config['CHATGPT']['MODELNAME']) + \
-              "/chat/completions/?api-version=" + (self.config['CHATGPT']['APIVERSION'])
-        headers = {
-            'Content-Type': 'application/json',
-            'api-key': (self.config['CHATGPT']['ACCESS_TOKEN'])
-        }
-        payload = {'messages': conversation}
-        response = requests.post(url, json=payload, headers=headers)
-        if response.status_code == 200:
-            data = response.json()
-            return data['choices'][0]['message']['content']
-        else:
-            return 'Error:', response
+from ChatGPT_HKBU import HKBU_ChatGPT
 
 # Initialize global variables
 global redis1
-global chatgpt  # Declare the global variable for chatgpt
 
 def main():
     # Load the configuration and create an Updater for the bot
-    config = configparser.ConfigParser()
-    config.read('config.ini', encoding='utf-8-sig')
-    updater = Updater(token=(config['TELEGRAM']['ACCESS_TOKEN']), use_context=True)
+    #config = configparser.ConfigParser()
+    #config.read('config.ini', encoding='utf-8-sig')
+    #updater = Updater(token=(config['TELEGRAM']['ACCESS_TOKEN']), use_context=True)
+    updater = Updater(token=os.environ(['TELEGRAM']['ACCESS_TOKEN']), use_context=True)
     dispatcher = updater.dispatcher
 
     # Initialize Redis connection with logging
     global redis1
-    redis1 = redis.Redis(host=(config['REDIS']['HOST']),
-                         password=(config['REDIS']['PASSWORD']),
-                         port=int((config['REDIS']['REDISPORT'])),
-                         decode_responses=config['REDIS'].getboolean('DECODE_RESPONSE'),
-                         username=(config['REDIS']['USER_NAME']))
+    redis1 = redis.Redis(host=(os.environ['REDIS']['HOST']),
+                         password=(os.environ['REDIS']['PASSWORD']),
+                         port=int((os.environ['REDIS']['REDISPORT'])),
+                         decode_responses=os.environ['REDIS'].getboolean('DECODE_RESPONSE'),
+                         username=(os.environ['REDIS']['USER_NAME']))
 
     # Initialize ChatGPT instance
     global chatgpt
-    chatgpt = HKBU_ChatGPT(config)  # Use config to initialize the ChatGPT instance
+    chatgpt = HKBU_ChatGPT()  # Use config to initialize the ChatGPT instance
 
     # Set logging configuration
     logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
