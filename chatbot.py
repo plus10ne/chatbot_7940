@@ -1,232 +1,186 @@
 #import configparser
 import os
+import requests
 import logging
 import redis
-from telegram import Update, ParseMode, BotCommand
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+from telegram import Update
+from telegram.ext import (Updater, CommandHandler, MessageHandler, Filters, CallbackContext)
 from ChatGPT_HKBU import HKBU_ChatGPT
-import re
 
+# Initialize global variables
 global redis1
-TELEGRAM_MAX_MESSAGE_LENGTH = int(os.environ.get("MAX_TOKEN"))
 
 def main():
-    updater = Updater(token=(os.environ["ACCESS_TOKEN_TG"]), use_context=True)
+    # Load the configuration and create an Updater for the bot
+    #config = configparser.ConfigParser()
+    #config.read('config.ini', encoding='utf-8-sig')
+    #updater = Updater(token=(config['TELEGRAM']['ACCESS_TOKEN']), use_context=True)
+    updater = Updater(token=os.environ['ACCESS_TOKEN_TG'], use_context=True)
     dispatcher = updater.dispatcher
-    global redis1
-    redis1 = redis.Redis(host=os.environ['HOST'], 
-                         password=os.environ['PASSWORD'],
-                         port=os.environ['REDISPORT'],
-                         decode_responses=(os.environ['DECODE_RESPONSES']),
-                         username=os.environ['USER_NAME']) 
-                         
-    # Logging
-    logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-    # Register dispatcher to handle message
-    # echo_handler = MessageHandler(Filters.text & (~Filters.command), echo)
-    # dispatcher.add_handler(echo_handler)
 
-    # dispatcher for chatgpt
+    # Initialize Redis connection with logging
+    global redis1
+    redis1 = redis.Redis(host=(os.environ['HOST']),
+                         password=(os.environ['PASSWORD']),
+                         port=int((os.environ['REDISPORT'])),
+                         decode_responses=(os.environ['DECODE_RESPONSE']),
+                         username=(os.environ['USER_NAME']))
+
+    # Initialize ChatGPT instance
     global chatgpt
-    chatgpt = HKBU_ChatGPT()
-    chatgpt_handler = MessageHandler(Filters.text & (~Filters.command), equiped_chatbot)
+    chatgpt = HKBU_ChatGPT()  # Use config to initialize the ChatGPT instance
+
+    # Set logging configuration
+    logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                        level=logging.INFO)
+
+    # Register a dispatcher for ChatGPT (ensure this is registered first)
+    chatgpt_handler = MessageHandler(Filters.text & ~Filters.command, equiped_chatgpt)  # Exclude commands
     dispatcher.add_handler(chatgpt_handler)
 
-    # Add two different commands
+    # Register other command handlers
     dispatcher.add_handler(CommandHandler("add", add))
+    dispatcher.add_handler(CommandHandler("set", set_key))       # /set <key> <value>
+    dispatcher.add_handler(CommandHandler("get", get_key))       # /get <key>
+    dispatcher.add_handler(CommandHandler("delete", delete_key)) # /delete <key>
+    dispatcher.add_handler(CommandHandler("hello", hello))       # /hello <name> -> Greeting handler
     dispatcher.add_handler(CommandHandler("help", help_command))
-    dispatcher.add_handler(CommandHandler("hello", hello))
-    dispatcher.add_handler(CommandHandler("delete", delete))
-    dispatcher.add_handler(CommandHandler("get", get))
-    dispatcher.add_handler(CommandHandler("set", set))
-    dispatcher.add_handler(CommandHandler("model", set_model))
 
-    # Set the bot menu
-    set_bot_commands(updater.bot)
-    # Start bot
+    # Start the bot
     updater.start_polling()
     updater.idle()
 
-def set_bot_commands(bot):
-    """Sets the bot's menu commands."""
-    bot_commands = [
-        BotCommand("/help", "Show help message"),
-        BotCommand("/add", "Add a keyword to the database"),
-        BotCommand("/delete", "Delete a keyword from the database"),
-        BotCommand("/get", "Get the count of a keyword"),
-        BotCommand("/set", "Change a keyword to another"),
-        BotCommand("/hello", "Greet the user"),
-        BotCommand("/model", "Select the model to use (chatgpt/gemini)"),
-    ]
-    bot.set_my_commands(bot_commands)
-
-def set_model(update: Update, context: CallbackContext) -> None:
-    """Set the model to be used by the chatbot."""
+# Handle ChatGPT interactions
+def equiped_chatgpt(update, context):
     global chatgpt
+    logging.info("Received message: %s", update.message.text)  # Debug log for received message
     try:
-        model = context.args[0].lower()
-        if model in ["chatgpt", "gemini"]:
-            chatgpt.current_model = model
-            update.message.reply_text(f"Model set to {model}.")
-        else:
-            update.message.reply_text("Invalid model. Choose 'chatgpt' or 'gemini'.")
-    except (IndexError, ValueError):
-        update.message.reply_text('Usage: /model <chatgpt/gemini>')
-
-def split_message(text, max_length=TELEGRAM_MAX_MESSAGE_LENGTH):
-    """Splits a long message into multiple messages of a maximum length."""
-    if len(text) <= max_length:
-        return [text]
-    else:
-        parts = []
-        while len(text) > max_length:
-            split_point = text.rfind(' ', 0, max_length)  # Find a space to split at
-            if split_point == -1:
-                split_point = max_length # if no space, just split at max length
-            parts.append(text[:split_point])
-            text = text[split_point:]
-        parts.append(text)
-        return parts
-    
-def escape_markdown_v2(text):
-    """Escapes reserved characters for Telegram's MarkdownV2."""
-    escape_chars = r"_\*\[\]\(\)~`>#\+\-=|\.!{}"
-    return re.sub(f"([{re.escape(escape_chars)}])", r"\\\1", text)
-
-def equiped_chatbot(update, context):
-    global chatgpt
-    if not hasattr(chatgpt, 'current_model'):
-        chatgpt.current_model = "gemini"
-        logging.warning("chatgpt.current_model was not set. Defaulting to 'gemini'.")
-    reply_message = chatgpt.submit(update.message.text, chatgpt.current_model)
-    logging.info("Update: " + str(update))
-    logging.info("Context: " + str(context))
-    # Split the message if it's too long
-    message_parts = split_message(reply_message)
-    for part in message_parts:
-        escaped_part = escape_markdown_v2(part)
-        context.bot.send_message(chat_id=update.effective_chat.id, text=escaped_part, parse_mode=ParseMode.MARKDOWN_V2)
-    # context.bot.send_message(chat_id=update.effective_chat.id, text=reply_message)
+        reply_message = chatgpt.submit(update.message.text)  # Send the user's message to ChatGPT
+        logging.info("ChatGPT reply: %s", reply_message)  # Debug log for ChatGPT's response
+        context.bot.send_message(chat_id=update.effective_chat.id, text=reply_message)
+    except Exception as e:
+        logging.error("Error in ChatGPT processing: %s", str(e))
+        context.bot.send_message(chat_id=update.effective_chat.id, text="Sorry, there was an error.")
 
 def echo(update, context):
-    """Echo the user message in lowercase.
-    
-    :param update: Make update.message.text to upper case
-    :type update: str
-    :param context: Reply with context
-    :type context: str
-    :return: lowercase of the message
-    :rtype: str
-    """
     reply_message = update.message.text.upper()
     logging.info("Update: " + str(update))
     logging.info("Context: " + str(context))
     context.bot.send_message(chat_id=update.effective_chat.id, text=reply_message)
 
-# Define a few command handlers. These usually take the two arguments update and
-# context. Error handlers also receive the raised TelegramError object in error.
 def help_command(update: Update, context: CallbackContext) -> None:
-    """A placeholder when the command /help is issued."""
-    update.message.reply_text('Helping you helping you.')
+    update.message.reply_text('Available commands:\n'
+                              '/add <keyword> - Add a keyword\n'
+                              '/set <key> <value> - Set a key-value pair\n'
+                              '/get <key> - Get the value of a key\n'
+                              '/delete <key> - Delete a key\n'
+                              '/hello <name> - Send a greeting')
 
+# Send a personalized greeting when the command /hello is issued.
 def hello(update: Update, context: CallbackContext) -> None:
-    """Greetings with hello with /hello "keyword".
-
-    :param update: not using the input for this function
-    :type update: str
-    :param context: Reply with Good day, "keyword"!
-    :type context: str
-    """
     try:
-        msg = context.args[0]
-        logging.info("Greeting action on: " + msg)
-        update.message.reply_text('Good day, ' + msg + '!')
-    except (IndexError, ValueError):
-        update.message.reply_text('Usage: /hello <keyword>')
+        if len(context.args) == 1:
+            name = context.args[0]  # Extract the name from the command
+            greeting = f"Good day, {name}!"
+            update.message.reply_text(greeting)
+        else:
+            update.message.reply_text('Usage: /hello <name>')
+    except Exception as e:
+        update.message.reply_text(f'Error: {str(e)}')
 
+# Handle the /add command
 def add(update: Update, context: CallbackContext) -> None:
-    """Add a message to DB when the command /add is issued.
-
-    :param update: args[0] as the keyword
-    :type update: str
-    :param context: Reply with You have said args[0] for "value" times.
-    :type context: str
-    """
     try:
         global redis1
-        logging.info("Add action on: " + context.args[0])
-        msg = context.args[0] # /add keyword
-        redis1.incr(msg)
-        value = redis1.get(msg)
-        if isinstance(value, bytes):
-            value = value.decode('utf-8')
-        update.message.reply_text("You have said " + msg + " for " + value + " times.")
+        if len(context.args) == 0:
+            update.message.reply_text('Usage: /add <keyword>')
+            return
 
-    except (IndexError, ValueError):
+        msg = context.args[0]  # /add keyword <-- this should store the keyword
+        logging.info("Incrementing keyword '%s' in Redis", msg)  # Log the action
+
+        # Increment the counter for the keyword in Redis
+        redis1.incr(msg)
+        
+        # Log the current count
+        count = redis1.get(msg)
+        logging.info("Keyword '%s' count after increment: %s", msg, count)
+
+        update.message.reply_text(f'You have said "{msg}" for {count} times.')
+    except (IndexError, ValueError) as e:
+        logging.error("Error in /add command: %s", str(e))
         update.message.reply_text('Usage: /add <keyword>')
 
-def delete(update: Update, context: CallbackContext) -> None:
-    """Delete a message when the command /delete is issued.
-
-    :param update: args[0] as the keyword
-    :type update: str
-    :param context: Reply with You have deleted "keyword".
-    :type context: str
-    """
+# Handle the /set command
+def set_key(update: Update, context: CallbackContext) -> None:
     try:
-        logging.info("Delete action on: " + context.args[0])
-        msg = context.args[0] # /delete keyword
-        redis1.delete(msg)
-        update.message.reply_text("You have deleted " + msg)
+        global redis1
+        if len(context.args) != 2:
+            update.message.reply_text('Usage: /set <key> <value>')
+            return
 
-    except (IndexError, ValueError):
-        update.message.reply_text('Usage: /delete <keyword>')
+        key, value = context.args
+        logging.info("Setting Redis key '%s' to value '%s'", key, value)  # Log the action
 
-def set(update: Update, context: CallbackContext) -> None:
-    """Set args[0] to args[1] when the command /set is issued.
+        # Set the key-value pair in Redis
+        redis1.set(key, value)
 
-    :param update: args[0] as the keyword to be changed, args[1] as the new keyword
-    :type update: str
-    :param context: Reply with args[0] changed to args[1]
-    :type context: str
-    """
+        # Log the set action
+        logging.info("Successfully set key '%s' to value '%s'", key, value)
+
+        update.message.reply_text(f'Successfully set {key} to {value}.')
+    except Exception as e:
+        logging.error("Error in /set command: %s", str(e))
+        update.message.reply_text(f'Error: {str(e)}')
+
+# Handle the /get command
+def get_key(update: Update, context: CallbackContext) -> None:
     try:
-        logging.info("Set action on: " + context.args[0] + " to " + context.args[1])
-        keywordA = context.args[0] # /set keywordA keywordB
-        keywordB = context.args[1]
-        value = redis1.get(keywordA)
-        if value is None:
-            update.message.reply_text("No record for: " + keywordA)
+        global redis1
+        if len(context.args) != 1:
+            update.message.reply_text('Usage: /get <key>')
+            return
+
+        key = context.args[0]
+        logging.info("Getting Redis key '%s'", key)  # Log the action
+
+        # Retrieve the value from Redis
+        value = redis1.get(key)
+        
+        # Log the retrieved value
+        if value:
+            logging.info("Found value for key '%s': %s", key, value)
+            update.message.reply_text(f'The value of {key} is {value}.')
         else:
-            redis1.set(keywordB, value)
-            redis1.delete(keywordA)
-            update.message.reply_text(keywordA + " changed to " + keywordB)
+            logging.info("Key '%s' does not exist in Redis", key)
+            update.message.reply_text(f'{key} does not exist.')
+    except Exception as e:
+        logging.error("Error in /get command: %s", str(e))
+        update.message.reply_text(f'Error: {str(e)}')
 
-    except (IndexError, ValueError):
-        update.message.reply_text('Usage: /set <keywordA> <keywordB>')
-
-
-
-def get(update: Update, context: CallbackContext) -> None:
-    """Get the number of occurence with keyword: args[0] when the command /get is issued.
-
-    :param update: args[0] as the keyword
-    :type update: str
-    :param context: Reply with Number of occurence of the keyword.
-    :type context: str
-    """
+# Handle the /delete command
+def delete_key(update: Update, context: CallbackContext) -> None:
     try:
-        logging.info("Get action on: " + context.args[0])
-        msg = context.args[0] # /get keyword
-        value = redis1.get(msg)
-        if value is None:
-            update.message.reply_text("No record for: " + msg)
+        global redis1
+        if len(context.args) != 1:
+            update.message.reply_text('Usage: /delete <key>')
+            return
+
+        key = context.args[0]
+        logging.info("Deleting Redis key '%s'", key)  # Log the action
+
+        # Check if the key exists in Redis
+        if redis1.exists(key):
+            # Delete the key from Redis
+            redis1.delete(key)
+            logging.info("Successfully deleted key '%s' from Redis", key)
+            update.message.reply_text(f'Successfully deleted {key}.')
         else:
-            if isinstance(value, bytes):
-                value = value.decode('utf-8')
-            update.message.reply_text("You have said " + msg + " for " + value + " times.")
-    except (IndexError, ValueError):
-        update.message.reply_text('Usage: /get <keyword>')
+            logging.info("Key '%s' does not exist in Redis", key)
+            update.message.reply_text(f'{key} does not exist.')
+    except Exception as e:
+        logging.error("Error in /delete command: %s", str(e))
+        update.message.reply_text(f'Error: {str(e)}')
 
 if __name__ == '__main__':
     main()

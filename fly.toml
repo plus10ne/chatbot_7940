@@ -1,9 +1,9 @@
-# fly.toml app configuration file generated for lab05-24464376 on 2025-03-14T20:17:45+08:00
+# fly.toml app configuration file generated for lab05-24464376-aged-glitter-6952 on 2025-03-21T14:38:35+08:00
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'lab05-24464376'
+app = 'lab05-24464376-aged-glitter-6952'
 primary_region = 'hkg'
 
 [build]
@@ -13,21 +13,21 @@ primary_region = 'hkg'
   PORT = '8080'
 
 [[services]]
+  protocol = 'tcp'
   internal_port = 8000
-  protocol = "tcp"
+
+  [[services.ports]]
+    port = 80
+    handlers = ['http']
+
+  [[services.ports]]
+    port = 443
+    handlers = ['tls', 'http']
 
   [services.concurrency]
+    type = 'connections'
     hard_limit = 25
     soft_limit = 20
-    type = "connections"
-
-  [[services.ports]]
-    handlers = ["http"]
-    port = 80
-    
-  [[services.ports]]
-    handlers = ["tls", "http"]
-    port = 443
 
 [[vm]]
   size = 'shared-cpu-1x'
